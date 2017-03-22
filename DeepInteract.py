@@ -10,6 +10,7 @@ from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
 from sklearn import metrics
 
+
 #import tensorflow as tf
 #tf.python.control_flow_ops = tf
 from sklearn.cross_validation import train_test_split
@@ -290,7 +291,7 @@ def autoencoder_two_subnetwork_fine_tuning(X_train1, X_train2, Y_train, X_test1,
     #return X_train1_tmp, X_test1_tmp, X_train2_tmp, X_test2_tmp, model
     return prefilter_train, prefilter_test, prefilter_train_bef, prefilter_test_bef
 
-def DeepMiner():
+def DeepInteract():
     X, labels = prepare_data(seperate = True)
     '''
     neg_tmp = [index for index,value in enumerate(labels) if value == 0]
@@ -476,4 +477,4 @@ def transfer_label_from_prob(proba):
 
 
 if __name__=="__main__":
-    DeepMiner()
+    DeepInteract()
