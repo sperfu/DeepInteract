@@ -5,11 +5,12 @@ import os
 import matplotlib.pyplot as plt
 from sklearn import svm, grid_search
 from sklearn.preprocessing import LabelEncoder
+from sklearn.svm import LinearSVC
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
+from sklearn.decomposition import PCA
 from sklearn import metrics
-
 
 #import tensorflow as tf
 #tf.python.control_flow_ops = tf
@@ -19,17 +20,19 @@ from sklearn.cross_validation import StratifiedKFold
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_curve, auc
 from sklearn.metrics import precision_recall_curve
+from sklearn.cluster import KMeans,Birch,MiniBatchKMeans
 import gzip
 import pandas as pd
 import pdb
 import random
 from random import randint
 import scipy.io
+import xlwt
 
 from keras.layers import Input, Dense
 from keras.engine.training import Model
 from keras.models import Sequential, model_from_config
-from keras.layers.core import  Dropout, Activation, Flatten, Merge
+from keras.layers.core import  Dropout, Activation, Flatten
 from keras.layers.normalization import BatchNormalization
 from keras.layers.advanced_activations import PReLU
 from keras.utils import np_utils, generic_utils
@@ -40,25 +43,29 @@ from keras.layers.recurrent import LSTM
 from keras.layers.embeddings import Embedding
 from keras import regularizers
 from keras.constraints import maxnorm
-from keras.optimizers import kl_divergence
 
-from DeepFunction import multiple_layer_autoencoder,autoencoder_two_subnetwork_fine_tuning
+from DeepFunction import multiple_layer_autoencoder,autoencoder_two_subnetwork_fine_tuning,last_layer_autoencoder
 
 def prepare_data(seperate=False):
     print "loading data"
     #miRNA_fea = np.loadtxt("circRNA_functional_sim.txt",dtype=float,delimiter=",")
     miRNA_fea = np.loadtxt("circRNA_sim.txt",dtype=float,delimiter=",")
-    disease_fea = np.loadtxt("disease_functional_sim2.txt",dtype=float,delimiter=",")
-    interaction = np.loadtxt("circRNA_disease_matrix_array.txt",dtype=int,delimiter=",")
+    #disease_fea = np.loadtxt("disease_functional_sim2.txt",dtype=float,delimiter=",")
+    disease_fea = np.loadtxt("disease_sim2.txt",dtype=float,delimiter=",")
+    #interaction = np.loadtxt("circRNA_disease_matrix_array_inter2.txt",dtype=int,delimiter=",")
+    interaction2 = np.loadtxt("p_value_list.txt",dtype=float,delimiter=",")
+    interaction = np.loadtxt("circRNA_disease_matrix_array5.txt",dtype=int,delimiter=",")
     
     link_number = 0
     train = []
     label = []
+    label2 = []
     link_position = []
     nonLinksPosition = []  # all non-link position^M
     for i in range(0, interaction.shape[0]):
         for j in range(0, interaction.shape[1]):
             label.append(interaction[i,j])
+            label2.append(interaction2[i,j])
             if interaction[i, j] == 1:
                 link_number = link_number + 1
                 link_position.append([i, j])
@@ -74,7 +81,7 @@ def prepare_data(seperate=False):
             else:
 		tmp_fea = miRNA_fea_tmp + disease_fea_tmp
             train.append(tmp_fea)
-    return np.array(train), label
+    return np.array(train), label,label2
 
 def calculate_performace(test_num, pred_y,  labels):
     tp =0
@@ -140,14 +147,14 @@ def DNN():
 
     model.add(Dense(input_dim=300, output_dim=2,init='glorot_normal'))  ##500
     model.add(Activation('sigmoid'))
-    sgd = SGD(l2=0.0,lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    #sgd = SGD(l2=0.0,lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
     adadelta = Adadelta(lr=1.0, rho=0.95, epsilon=1e-08)
     model.compile(loss='binary_crossentropy', optimizer=adadelta, class_mode="binary")##rmsprop sgd
     return model
 
 def DNN2():
     model = Sequential()
-    model.add(Dense(input_dim=128, output_dim=500,init='glorot_normal')) ## 1027  128
+    model.add(Dense(input_dim=64, output_dim=500,init='glorot_normal')) ## 1027  128 32
     model.add(Activation('relu'))
     model.add(Dropout(0.3))
 
@@ -161,7 +168,7 @@ def DNN2():
 
     model.add(Dense(input_dim=300, output_dim=2,init='glorot_normal'))  ##500
     model.add(Activation('sigmoid'))
-    sgd = SGD(l2=0.0,lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    #sgd = SGD(l2=0.0,lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
     adadelta = Adadelta(lr=1.0, rho=0.95, epsilon=1e-08)
     model.compile(loss='binary_crossentropy', optimizer=adadelta, class_mode="binary")##rmsprop sgd
     return model
@@ -169,7 +176,7 @@ def DNN2():
 
 
 def DeepInteract():
-    X, labels = prepare_data(seperate = True)
+    X, labels, labels2 = prepare_data(seperate = True)
     '''
     neg_tmp = [index for index,value in enumerate(labels) if value == 0]
     np.random.shuffle(neg_tmp)
@@ -185,19 +192,23 @@ def DeepInteract():
     X_data1, X_data2 = transfer_array_format(X) # X X_new
     print X_data1.shape,X_data2.shape
     y, encoder = preprocess_labels(labels)# labels labels_new
+    y2 = np.array(labels2)# labels labels_new
+
     num = np.arange(len(y))
     np.random.shuffle(num)
+    '''
     X_data1 = X_data1[num]
     X_data2 = X_data2[num]
     y = y[num]
-    
+    y2 = y2[num]
+    '''
     num_cross_val = 5
-    
+    all_performance = []
     all_performance_rf = []
-    
+    all_performance_bef = []
     all_performance_DNN = []
     all_performance_SDADNN = []
-    
+    all_performance_blend = []
     all_labels = []
     all_prob = {}
     num_classifier = 3
@@ -213,6 +224,10 @@ def DeepInteract():
         test2 = np.array([x for i, x in enumerate(X_data2) if i % num_cross_val == fold])
         train_label = np.array([x for i, x in enumerate(y) if i % num_cross_val != fold])
         test_label = np.array([x for i, x in enumerate(y) if i % num_cross_val == fold])
+	#pdb.set_trace()
+        #train_label2 = np.array([x for i, x in enumerate(y2) if i % num_cross_val != fold])
+        train_label2 = np.array([x for i, x in enumerate(y2) if i % num_cross_val != fold])
+        test_label2 = np.array([x for i, x in enumerate(y2) if i % num_cross_val == fold])
   
           
         real_labels = []
@@ -221,7 +236,14 @@ def DeepInteract():
                 real_labels.append(0)
             else:
                 real_labels.append(1)
-
+	'''
+	real_labels2 = []
+        for val in test_label2:
+            if val[0] == 1:
+                real_labels2.append(0)
+            else:
+                real_labels2.append(1)
+	'''
         train_label_new = []
         for val in train_label:
             if val[0] == 1:
@@ -233,7 +255,9 @@ def DeepInteract():
         blend_test = np.zeros((test1.shape[0], num_classifier)) # Number of testing data x Number of classifiers 
         skf = list(StratifiedKFold(train_label_new, num_classifier))  
         class_index = 0
-        prefilter_train, prefilter_test, prefilter_train_bef, prefilter_test_bef = autoencoder_two_subnetwork_fine_tuning(train1, train2, train_label, test1, test2, test_label)
+        #prefilter_train, prefilter_test, prefilter_train_bef, prefilter_test_bef = autoencoder_two_subnetwork_fine_tuning(train1, train2, train_label, test1, test2, test_label)
+        #prefilter_train_bef, prefilter_test_bef = autoencoder_two_subnetwork_fine_tuning(train1, train2, train_label, test1, test2, test_label)
+        prefilter_train_bef, prefilter_test_bef = autoencoder_two_subnetwork_fine_tuning(X_data1, X_data2, train_label, test1, test2, test_label)
         #X_train1_tmp, X_test1_tmp, X_train2_tmp, X_test2_tmp, model = autoencoder_two_subnetwork_fine_tuning(train1, train2, train_label, test1, test2, test_label)
         #model = autoencoder_two_subnetwork_fine_tuning(train1, train2, train_label, test1, test2, test_label)
         #model = merge_seperate_network(train1, train2, train_label)
@@ -247,13 +271,112 @@ def DeepInteract():
                 real_labels.append(1)
                 
         all_labels = all_labels + real_labels
+	all_data_labels = real_labels + train_label_new
+
+	all_prefilter_data = np.vstack((prefilter_test_bef,prefilter_train_bef))
+	all_label2_data = np.vstack((test_label2.reshape(test_label2.shape[0],1),train_label2.reshape(train_label2.shape[0],1)))
         #prefilter_train, new_scaler = preprocess_data(prefilter_train, stand =False)
         #prefilter_test, new_scaler = preprocess_data(prefilter_test, scaler = new_scaler, stand = False)
-        
-        
-        
+	true_data = np.hstack((train1[46529,:],train2[46529,:])) # 61713
+	#true_data = np.vstack((prefilter_train_bef[46529,:],prefilter_train_bef[64833,:])) # 61713
+        #false_data = np.vstack((prefilter_train_bef[46528,:],prefilter_train_bef[64834,:]))
+        false_data = np.hstack((train1[46528,:],train2[46529,:]))
+	#pdb.set_trace()
+        '''
+        prefilter_train1 = xgb.DMatrix( prefilter_train, label=train_label_new)
+        evallist  = [(prefilter_train1, 'train')]
+        num_round = 10
+        clf = xgb.train( plst, prefilter_train1, num_round, evallist )
+        prefilter_test1 = xgb.DMatrix( prefilter_test)
+        ae_y_pred_prob = clf.predict(prefilter_test1)
+        '''
+	'''
+        tmp_aver = [0] * len(real_labels)
+        print 'deep autoencoder'
+        clf = RandomForestClassifier(n_estimators=50)
+        clf.fit(prefilter_train_bef, train_label_new)
+        ae_y_pred_prob = clf.predict_proba(prefilter_test_bef)[:,1]
+        all_prob[class_index] = all_prob[class_index] + [val for val in ae_y_pred_prob]
+        tmp_aver = [val1 + val2/3 for val1, val2 in zip(ae_y_pred_prob, tmp_aver)]
+        proba = transfer_label_from_prob(ae_y_pred_prob)
+        #pdb.set_trace()            
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), proba,  real_labels)
+	fpr, tpr, auc_thresholds = roc_curve(real_labels, ae_y_pred_prob)
+	auc_score = auc(fpr, tpr)
+	#scipy.io.savemat('deep',{'fpr':fpr,'tpr':tpr,'auc_score':auc_score})
+	## AUPR score add 
+        precision1, recall, pr_threshods = precision_recall_curve(real_labels, ae_y_pred_prob)
+        aupr_score = auc(recall, precision1)
+	#scipy.io.savemat('deep_aupr',{'recall':recall,'precision':precision1,'aupr_score':aupr_score})
+        print acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score
+	all_performance.append([acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score])
+	'''
+	print 'deep autoencoder without fine tunning'
+        class_index = class_index + 1
+        #clf = RandomForestClassifier(n_estimators=50)
+	#pdb.set_trace()
+	#clf = KMeans(n_clusters=2, random_state=0).fit(prefilter_train_bef)
+	#clf = MiniBatchKMeans(n_clusters=2, init=np.vstack((false_data,true_data)),max_iter=1).fit(np.vstack((false_data,true_data)))
+        #clf = KMeans(n_clusters=2, init=np.vstack((false_data,true_data)),max_iter=1).fit(np.vstack((false_data,true_data)))
+        #clf.fit(prefilter_train_bef, train_label_new)
+        #ae_y_pred_prob = clf.predict(prefilter_test_bef)#[:,1]
+        pdb.set_trace()            
+	#prefilter_train_bef2 = np.hstack((all_prefilter_data,all_label2_data))
+	prefilter_train_bef2 = np.hstack((prefilter_train_bef,y2.reshape(y2.shape[0],1)))
+	prefilter_test_bef2 = np.hstack((prefilter_test_bef,test_label2.reshape((test_label2.shape[0],1))))
+	#ae_y_pred_prob = last_layer_autoencoder(prefilter_train_bef2,all_data_labels, activation = 'sigmoid', batch_size = 100, nb_epoch = 100, last_dim = 2)
+	ae_y_pred_prob = last_layer_autoencoder(prefilter_train_bef2,all_data_labels, activation = 'sigmoid', batch_size = 100, nb_epoch = 100, last_dim = 2)
+	workbook = xlwt.Workbook()
+	worksheet = workbook.add_sheet('My')
+	i_tmp =0
+	for line_i in range(ae_y_pred_prob.shape[0]):
+	    if round(ae_y_pred_prob[line_i,1],4) > 0.5:
+	        worksheet.write(i_tmp,0,line_i)
+	        worksheet.write(i_tmp,1,line_i/104)
+	        worksheet.write(i_tmp,2,round(ae_y_pred_prob[line_i,1],4))
+	        worksheet.write(i_tmp,3,line_i%104+1000)
+	        worksheet.write(i_tmp,4,"Undirected")
+		i_tmp = i_tmp + 1
+	workbook.save('cluster_Workbook1.xls')
+	
+	workbook = xlwt.Workbook()
+        worksheet = workbook.add_sheet('My')
+	i_tmp =0
+        for line_i in range(ae_y_pred_prob.shape[0]):
+	    if round(ae_y_pred_prob[line_i,0],4) > 0.5:
+                worksheet.write(i_tmp,0,line_i)
+                worksheet.write(i_tmp,1,line_i/104)
+                worksheet.write(i_tmp,2,round(ae_y_pred_prob[line_i,0],4))
+                worksheet.write(i_tmp,3,line_i%104+1000)
+                worksheet.write(i_tmp,4,"Undirected")
+		i_tmp = i_tmp + 1
+        workbook.save('cluster_Workbook2.xls')
+	pdb.set_trace()
+	clf = KMeans(n_clusters=2, random_state=0).fit(prefilter_train_bef2)
+	#clf = KMeans(n_clusters=2, random_state=0).fit(all_prefilter_data)
+	#ae_y_pred_prob = clf.predict(prefilter_train_bef2)#(prefilter_train_bef2)
+	ae_y_pred_prob = clf.predict(prefilter_train_bef2)
+	'''
+	if ae_y_pred_prob[0][0] > ae_y_pred_prob[0][1]:
+	    aha = 1
+	else:
+	    aha = 0
+        '''
+	#pdb.set_trace()            
+        proba = transfer_label_from_prob(ae_y_pred_prob)
+        #pdb.set_trace()            
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(all_data_labels), proba,  all_data_labels)
+        fpr, tpr, auc_thresholds = roc_curve(all_data_labels, ae_y_pred_prob)
+        auc_score = auc(fpr, tpr)
+	#scipy.io.savemat('deep_without',{'fpr':fpr,'tpr':tpr,'auc_score':auc_score})
+        ## AUPR score add 
+        precision1, recall, pr_threshods = precision_recall_curve(all_data_labels, ae_y_pred_prob)
+        aupr_score = auc(recall, precision1)
+        #scipy.io.savemat('deep_without_aupr',{'recall':recall,'precision':precision1,'aupr_score':aupr_score})
+        print acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score
+        all_performance_bef.append([acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score])
 
-	print 'AdaBoost using processed feature'
+	print 'random forest using raw feature'
         class_index = class_index + 1
         prefilter_train = np.concatenate((train1, train2), axis = 1)
         prefilter_test = np.concatenate((test1, test2), axis = 1)
@@ -264,21 +387,39 @@ def DeepInteract():
         clf.fit(prefilter_train_bef, train_label_new)
         ae_y_pred_prob = clf.predict_proba(prefilter_test_bef)[:,1]
         all_prob[class_index] = all_prob[class_index] + [val for val in ae_y_pred_prob]
-        
+        tmp_aver = [val1 + val2/3 for val1, val2 in zip(ae_y_pred_prob, tmp_aver)]
         proba = transfer_label_from_prob(ae_y_pred_prob)
 
         acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), proba,  real_labels)
         fpr, tpr, auc_thresholds = roc_curve(real_labels, ae_y_pred_prob)
         auc_score = auc(fpr, tpr)
 	scipy.io.savemat('raw',{'fpr':fpr,'tpr':tpr,'auc_score':auc_score})
-		## AUPR score add 
+	## AUPR score add 
         precision1, recall, pr_threshods = precision_recall_curve(real_labels, ae_y_pred_prob)
         aupr_score = auc(recall, precision1)
 	#scipy.io.savemat('raw_aupr',{'recall':recall,'precision':precision1,'aupr_score':aupr_score})
         print acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score
         all_performance_rf.append([acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score])
-        
-	print 'DNN using raw feature'
+        ### Only RF
+ 	clf = RandomForestClassifier(n_estimators=50)
+        #clf = AdaBoostClassifier(n_estimators=50)
+        #clf = DecisionTreeClassifier()
+        clf.fit(prefilter_train_bef, train_label_new)
+        ae_y_pred_prob = clf.predict_proba(prefilter_test_bef)[:,1]
+        #all_prob[class_index] = all_prob[class_index] + [val for val in ae_y_pred_prob]
+        #tmp_aver = [val1 + val2/3 for val1, val2 in zip(ae_y_pred_prob, tmp_aver)]
+        proba = transfer_label_from_prob(ae_y_pred_prob)
+
+        acc, precision, sensitivity, specificity, MCC = calculate_performace(len(real_labels), proba,  real_labels)
+        fpr, tpr, auc_thresholds = roc_curve(real_labels, ae_y_pred_prob)
+        auc_score = auc(fpr, tpr)
+        #scipy.io.savemat('raw',{'fpr':fpr,'tpr':tpr,'auc_score':auc_score})
+        ## AUPR score add
+        precision1, recall, pr_threshods = precision_recall_curve(real_labels, ae_y_pred_prob)
+        aupr_score = auc(recall, precision1)
+        #scipy.io.savemat('raw_aupr',{'recall':recall,'precision':precision1,'aupr_score':aupr_score})
+        print "RF :", acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score
+
         ## DNN 
         class_index = class_index + 1
         prefilter_train = np.concatenate((train1, train2), axis = 1)
@@ -299,7 +440,6 @@ def DeepInteract():
         all_performance_DNN.append([acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score])
 
 	## SDA + DNN
-	print 'SDA DNN using processed feature'
         class_index = class_index + 1
         model_DNN = DNN2()
         train_label_new_forDNN = np.array([[0,1] if i == 1 else [1,0] for i in train_label_new])
@@ -316,8 +456,13 @@ def DeepInteract():
         print "SDADNN :",acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score
         all_performance_SDADNN.append([acc, precision, sensitivity, specificity, MCC, auc_score, aupr_score])
         pdb.set_trace()
-    
-    print 'mean performance of ADA using processed feature'
+    print 'mean performance of deep autoencoder'
+    print np.mean(np.array(all_performance), axis=0)
+    print '---' * 50 
+    print 'mean performance of deep autoencoder without fine tunning'
+    print np.mean(np.array(all_performance_bef), axis=0)
+    print '---' * 50 
+    print 'mean performance of ADA using raw feature'
     print np.mean(np.array(all_performance_rf), axis=0)
     print '---' * 50    
     print 'mean performance of DNN using raw feature'
@@ -329,8 +474,15 @@ def DeepInteract():
     #print np.mean(np.array(all_performance_blend), axis=0)
     #print '---' * 50
 
-    fileObject = open('resultListAUC_aupr_ADA.txt', 'w')
-    
+    fileObject = open('resultListAUC_aupr_ADA5_inter2.txt', 'w')
+    for i in all_performance:
+        k=' '.join([str(j) for j in i])
+	fileObject.write(k+"\n")
+    fileObject.write('\n')
+    for i in all_performance_bef:
+        k=' '.join([str(j) for j in i])
+        fileObject.write(k+"\n")
+    fileObject.write('\n')
     for i in all_performance_rf:
         k=' '.join([str(j) for j in i])
         fileObject.write(k+"\n")
@@ -349,7 +501,7 @@ def DeepInteract():
     fileObject.close()
 
 def transfer_label_from_prob(proba):
-    label = [1 if val>=0.5 else 0 for val in proba]
+    label = [1 if val>=0.9 else 0 for val in proba]
     return label
 
 
