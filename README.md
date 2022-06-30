@@ -1,4 +1,4 @@
-# DeepInteract-for-CircRNA-Disease-Inference-
+# DeepInteract
 CircRNA-disease inference using deep ensemble model based on triple association
 - DeepInteract_new.py is the main code using both supervised and unsupervised version of deep ensemble models
 - Supervised version utilized autoencoder and deep neuron network to classify one circRNA to disease-related one or non-disease-related 
